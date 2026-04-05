@@ -2,7 +2,7 @@
 seo-audit — Comprehensive SEO scanner for static sites.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Peter Saddington"
 __license__ = "MIT"
 

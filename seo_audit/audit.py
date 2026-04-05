@@ -46,6 +46,8 @@ SKIP_DIRS = {
     "hooks", ".claude",
 }
 
+SKIP_FRAGMENTS = {"body.html", "tail.html"}  # HTML partials without <head>, not real pages
+
 # Generic image filenames that hurt SEO
 GENERIC_IMG_NAMES = {
     "img", "image", "photo", "picture", "pic", "screenshot",
@@ -113,7 +115,7 @@ class SEOParser(HTMLParser):
         if tag == "body":
             self._in_body = True
 
-        elif tag == "title":
+        elif tag == "title" and self.title is None:
             self._in_title = True
             self._title_parts = []
 
@@ -425,7 +427,7 @@ def audit_page(filepath, site_path, sitemap_urls=None, own_domain=None, related_
                 "Make og:url match canonical exactly")
 
     # 5. Twitter cards
-    required_tw = ["twitter:card", "twitter:title", "twitter:description", "twitter:image"]
+    required_tw = ["twitter:card", "twitter:title", "twitter:description", "twitter:image", "twitter:creator"]
     missing_tw = [t for t in required_tw if t not in p.twitter]
     if missing_tw:
         if not is_404:
@@ -442,25 +444,37 @@ def audit_page(filepath, site_path, sitemap_urls=None, own_domain=None, related_
         for i, raw in enumerate(p.jsonld):
             try:
                 schema = json.loads(raw)
-                stype = schema.get("@type", "unknown")
+                # Handle @graph arrays and bare arrays
+                schemas = []
+                if isinstance(schema, list):
+                    schemas = schema
+                elif isinstance(schema, dict) and "@graph" in schema:
+                    schemas = schema["@graph"]
+                elif isinstance(schema, dict):
+                    schemas = [schema]
 
-                # Article checks
-                if stype in ("Article", "NewsArticle", "BlogPosting"):
-                    article_required = ["headline", "datePublished", "author", "image"]
-                    missing = [f for f in article_required if f not in schema]
-                    if missing:
-                        add(HIGH, "Schema", f"Article schema missing: {', '.join(missing)}",
-                            "Google won't show rich results without these")
+                for s in schemas:
+                    if not isinstance(s, dict):
+                        continue
+                    stype = s.get("@type", "unknown")
 
-                # DEPRECATED: FAQPage (restricted to gov/health since Aug 2023)
-                if stype == "FAQPage":
-                    add(HIGH, "Schema", "FAQPage schema is deprecated for non-gov/health sites (Aug 2023)",
-                        "Remove FAQPage schema — Google ignores it for commercial sites")
+                    # Article checks
+                    if stype in ("Article", "NewsArticle", "BlogPosting"):
+                        article_required = ["headline", "datePublished", "author", "image"]
+                        missing = [f for f in article_required if f not in s]
+                        if missing:
+                            add(HIGH, "Schema", f"Article schema missing: {', '.join(missing)}",
+                                "Google won't show rich results without these")
 
-                # HowTo deprecated Sept 2023
-                if stype == "HowTo":
-                    add(HIGH, "Schema", "HowTo schema deprecated (Sept 2023)",
-                        "Remove HowTo schema — no longer generates rich results")
+                    # DEPRECATED: FAQPage (restricted to gov/health since Aug 2023)
+                    if stype == "FAQPage":
+                        add(HIGH, "Schema", "FAQPage schema is deprecated for non-gov/health sites (Aug 2023)",
+                            "Remove FAQPage schema — Google ignores it for commercial sites")
+
+                    # HowTo deprecated Sept 2023
+                    if stype == "HowTo":
+                        add(HIGH, "Schema", "HowTo schema deprecated (Sept 2023)",
+                            "Remove HowTo schema — no longer generates rich results")
 
             except json.JSONDecodeError:
                 add(HIGH, "Schema", f"Invalid JSON-LD in block {i+1}",
@@ -1012,7 +1026,7 @@ def find_html_files(site_path, skip_dirs=None):
     for root, dirs, files in os.walk(site_path):
         dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".") and not d.startswith("_")]
         for f in files:
-            if f.endswith(".html"):
+            if f.endswith(".html") and f not in SKIP_FRAGMENTS:
                 results.append(os.path.join(root, f))
     return sorted(results)
 
@@ -1496,18 +1510,18 @@ def apply_bulk_fixes(site_result, dry_run=False, domain=None):
                 f'  <meta property="og:description" content="{d}">\n'
                 f'  <meta property="og:type" content="website">\n'
                 f'  <meta property="og:url" content="{url}">\n'
-                f'  <meta property="og:image" content="https://{domain}/images/og-image.svg">\n'
+                f'  <meta property="og:image" content="https://{domain}/images/og-image.png">\n'
                 f'  <meta name="twitter:card" content="summary_large_image">\n'
                 f'  <meta name="twitter:title" content="{t}">\n'
                 f'  <meta name="twitter:description" content="{d}">\n'
-                f'  <meta name="twitter:image" content="https://{domain}/images/og-image.svg">\n'
+                f'  <meta name="twitter:image" content="https://{domain}/images/og-image.png">\n'
             )
             content = content.replace('</head>', f'{og_block}</head>', 1)
             fixes_applied.append("Added OG + Twitter card tags")
 
         # --- 5c. Add missing og:image where other OG tags exist ---
         if has_og and not re.search(r'<meta\s+property=["\']og:image["\']', content, re.IGNORECASE):
-            img_tag = f'  <meta property="og:image" content="https://{domain}/images/og-image.svg">\n'
+            img_tag = f'  <meta property="og:image" content="https://{domain}/images/og-image.png">\n'
             content = re.sub(
                 r'(<meta\s+property=["\']og:type["\'][^>]*>)',
                 lambda m: m.group(0) + '\n' + img_tag.rstrip('\n'),
@@ -1560,7 +1574,7 @@ def apply_bulk_fixes(site_result, dry_run=False, domain=None):
                 content = new_content
                 fixes_applied.append("Fixed JSON-LD syntax issues")
 
-        # --- 9. Fix Article schema (image/author/datePublished) ---
+        # --- 9. Fix Article schema (add missing image) ---
         if _re_has_jsonld(content):
             jsonld_m = re.search(
                 r'(<script\s+type=["\']application/ld\+json["\']>)(.*?)(</script>)',
@@ -1572,14 +1586,7 @@ def apply_bulk_fixes(site_result, dry_run=False, domain=None):
                     if schema.get("@type") == "Article":
                         changed = False
                         if "image" not in schema:
-                            schema["image"] = f"https://{domain}/images/og-image.svg"
-                            changed = True
-                        if "author" not in schema:
-                            schema["author"] = {"@type": "Person", "name": "Editorial Team"}
-                            changed = True
-                        if "datePublished" not in schema:
-                            date_m = re.search(r'(\d{4}-\d{2}-\d{2})', page["file"])
-                            schema["datePublished"] = date_m.group(1) if date_m else "2026-01-01"
+                            schema["image"] = f"https://{domain}/images/og-image.png"
                             changed = True
                         if changed:
                             new_json = json.dumps(schema, indent=2, ensure_ascii=False)
@@ -1587,7 +1594,7 @@ def apply_bulk_fixes(site_result, dry_run=False, domain=None):
                                 jsonld_m.group(0),
                                 f'{jsonld_m.group(1)}\n{new_json}\n{jsonld_m.group(3)}'
                             )
-                            fixes_applied.append("Fixed Article schema (image/author/datePublished)")
+                            fixes_applied.append("Fixed Article schema (added image)")
                 except (json.JSONDecodeError, AttributeError):
                     pass
 

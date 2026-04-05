@@ -11,7 +11,7 @@ A comprehensive SEO scanner for static HTML sites. Zero external dependencies fo
 - **Content** — image alt text, generic image filenames, thin content detection, meta description truncation
 - **E-E-A-T** — author attribution, contact page, article dates, HTTPS canonicals
 - **Link Graph** — cross-link checking, link depth (BFS from index), orphan pages, internal link count
-- **Schema** — deprecated FAQPage/HowTo detection, Article required fields
+- **Schema** — @graph and array JSON-LD support, deprecated FAQPage/HowTo detection, Article required fields
 - **GEO/AI** — llms.txt, question-format headings
 - **Mobile** — zoom-blocking viewport, apple-touch-icon, image CLS (missing width/height), lazy loading, responsive CSS, font size, fixed-width containers, box-sizing
 
