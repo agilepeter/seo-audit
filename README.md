@@ -226,3 +226,7 @@ All data is stored in `~/.seo-audit/`:
 ## License
 
 MIT — Copyright 2026 Peter Saddington
+
+---
+
+_Last verified by CI: 2026-05-02_
