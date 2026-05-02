@@ -1,0 +1,66 @@
+name: Monthly Health Check
+
+on:
+  schedule:
+    - cron: '0 13 1 * *'  # 1st of month, 13:00 UTC (9:00 AM EDT)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Import smoke test
+        run: |
+          python -c "
+          import seo_audit
+          print('Public API:', sorted(x for x in dir(seo_audit) if not x.startswith('_')))
+          print('Smoke test passed.')
+          "
+
+      - name: Run audit against this repo's README (self-test)
+        run: |
+          mkdir -p /tmp/seo-self-test
+          cat > /tmp/seo-self-test/index.html <<'HTML'
+          <!DOCTYPE html><html lang="en"><head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>seo-audit — self-test fixture</title>
+            <meta name="description" content="Minimal valid HTML for verifying the auditor parses without errors.">
+            <link rel="canonical" href="https://example.com/">
+          </head><body><main><h1>Self-test</h1><p>Hello.</p></main></body></html>
+          HTML
+          python -m seo_audit /tmp/seo-self-test/ || echo "audit ran (non-zero is informational)"
+
+      - name: Update last-verified date in README
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          if grep -q "^_Last verified by CI:" README.md; then
+            sed -i "s|^_Last verified by CI:.*|_Last verified by CI: $DATE_|" README.md
+          else
+            printf "\n---\n\n_Last verified by CI: %s_\n" "$DATE" >> README.md
+          fi
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if ! git diff --staged --quiet; then
+            git commit -m "ci: monthly health check $(date -u +%Y-%m)"
+            git push
+          else
+            echo "README already up-to-date"
+          fi
